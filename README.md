@@ -11,6 +11,8 @@ Kiro Gateway 把 Kiro 企业账号接入本机网关，供 Claude Code CLI 和 C
 
 **登录状态保存在安装目录的 `data` 中。** 从同一目录重启通常不需要重新登录；另解压到新目录不会自动继承账号。不要公开或分发已运行过的目录，其中可能有数据库、密钥、日志和备份。
 
+**Kiro 企业认证不需要 Google 或 iFlow 凭据。** Gemini CLI、Antigravity 和 iFlow 的独立 OAuth 登录入口默认关闭。如需使用某个入口，请在网关进程的环境中配置自己的 OAuth 应用：分别以 `KIRO_GATEWAY_GEMINI_CLI`、`KIRO_GATEWAY_ANTIGRAVITY` 或 `KIRO_GATEWAY_IFLOW` 为前缀，同时设置 `_CLIENT_ID` 和 `_CLIENT_SECRET`，然后重启。不要把值写进源码或分发包。
+
 ## 在线更新
 
 支持在线更新的启动器从本仓库的最新正式 Release 读取签名清单。用户确认后，网关只下载当前平台的升级包，验证 Ed25519 签名和 SHA-256，再备份数据并重启。更新源和发布者公钥可以在“检查更新 → 高级选项”配置。旧启动器的一次性迁移见[绿色版使用说明](./deploy/PORTABLE.md)。
