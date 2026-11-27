@@ -180,6 +180,27 @@ func TestE2E_OpenAIChat_DirectProviderModel(t *testing.T) {
 	require.Equal(t, "hello from upstream", out.Choices[0].Message.Content)
 }
 
+func TestE2E_KiroRequiredHostedSearch(t *testing.T) {
+	h := newE2E(t, func(http.ResponseWriter, *http.Request) { t.Error("unexpected upstream call") })
+	for _, tc := range []struct{ path, args string }{
+		{"/v1/messages", `"tools":[{"type":"web_search_20250305","name":"web_search"}],"tool_choice":{"type":"tool","name":"web_search"}`},
+		{"/v1/responses", `"stream":true,"tool_choice":{"type":"web_search_preview"},"tools":[{"type":"web_search_preview"}]`},
+		{"/v1/responses", `"tool_choice":"required","tools":[{"type":"web_search"}]`},
+		{"/v1/responses", `"tool_choice":{"type":"allowed_tools","mode":"required","tools":[{"type":"web_search"}]},"tools":[{"type":"function","name":"read"},{"type":"web_search"}]`},
+		{"/v1/chat/completions", `"web_search_options":{}`},
+	} {
+		r := h.post(t, tc.path, `{"model":"kiro/claude-opus-5.5",`+tc.args+`}`, h.apiKey)
+		require.Equal(t, http.StatusBadRequest, r.StatusCode)
+		var out struct {
+			Error struct{ Type, Message string }
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&out))
+		r.Body.Close()
+		require.Equal(t, "invalid_request_error", out.Error.Type)
+		require.Contains(t, out.Error.Message, "No search was performed")
+	}
+}
+
 func TestE2E_RejectsMissingAuth(t *testing.T) {
 	h := newE2E(t, openAIUpstream())
 	resp := h.post(t, "/v1/chat/completions", `{"model":"openai/gpt-4o","messages":[]}`, "")

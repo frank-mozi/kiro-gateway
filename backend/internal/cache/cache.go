@@ -88,7 +88,7 @@ func (c *Cache) Lookup(ctx context.Context, vec []float32) (*core.ChatResponse, 
 
 // Store caches a response under its prompt embedding.
 func (c *Cache) Store(ctx context.Context, vec []float32, resp *core.ChatResponse) error {
-	if !c.cfg.Enabled || len(vec) == 0 || resp == nil {
+	if !c.cfg.Enabled || len(vec) == 0 || resp == nil || resp.HostedSearch != nil {
 		return nil
 	}
 	return c.store.Put(ctx, Entry{

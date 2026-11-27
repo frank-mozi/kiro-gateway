@@ -123,6 +123,9 @@ func (AnthropicCodec) ParseRequest(body []byte) (*core.ChatRequest, error) {
 			continue
 		}
 		if isAntServerTool(t.Type) {
+			if hostedSearchType(t.Type) {
+				recordSearchTool(req, rawTool, raw.ToolChoice, false)
+			}
 			// Server tools have no function schema; keep the definition
 			// verbatim for same-dialect upstreams.
 			req.Tools = append(req.Tools, core.Tool{Name: t.Name, Raw: rawTool})
@@ -136,6 +139,7 @@ func (AnthropicCodec) ParseRequest(body []byte) (*core.ChatRequest, error) {
 		})
 	}
 	req.ToolChoice = claudeToolChoiceToOpenAI(raw.ToolChoice)
+	req.RequiresHostedWebSearch = requiresHostedSearch(raw.ToolChoice, raw.Tools)
 	if len(raw.ToolChoice) > 0 {
 		var tc struct {
 			DisableParallel *bool `json:"disable_parallel_tool_use"`
@@ -816,6 +820,9 @@ func (AnthropicCodec) ParseResponse(body []byte, model string) (*core.ChatRespon
 }
 
 func (AnthropicCodec) RenderResponse(resp *core.ChatResponse) ([]byte, error) {
+	if resp.HostedSearch != nil {
+		return renderHostedSearchResponse(core.DialectAnthropic, resp)
+	}
 	var content []map[string]any
 	for _, p := range resp.Message.Content {
 		switch p.Type {

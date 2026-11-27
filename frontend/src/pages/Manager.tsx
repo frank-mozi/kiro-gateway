@@ -254,8 +254,10 @@ function ClientForm({ toolId, baseUrl, busy, perform, onSaved }: {
   const save = async (e: FormEvent) => {
     e.preventDefault();
     if (!await confirm({
-      title: "写入客户端配置？",
-      description: `将修改网关所在机器当前用户的 ${toolId === "claude" ? "Claude Code" : "Codex CLI"} 配置，不修改浏览器所在的其他机器。保留其他配置项，但格式或注释可能变化；首次修改前会备份已有文件。`,
+      title: toolId === "codex" ? "将 Codex 自定义代理替换为 Kiro Gateway？" : "写入客户端配置？",
+      description: toolId === "codex"
+        ? "将修改网关所在机器的 Codex 配置：移除其他自定义 provider，并让使用这些 provider 的 profile 继承新的代理和默认模型。移除前备份现有配置；不修改登录文件或无关设置。保存后请完全退出并重新打开 Codex Desktop。"
+        : "将修改网关所在机器当前用户的 Claude Code 配置，不修改浏览器所在的其他机器。保留其他配置项，但格式或注释可能变化；首次修改前会备份已有文件。",
       confirmLabel: "确认写入", cancelLabel: "取消",
     })) return;
     await perform("配置客户端", async () => {
@@ -266,7 +268,8 @@ function ClientForm({ toolId, baseUrl, busy, perform, onSaved }: {
         if (!createdKey.current) createdKey.current = (await api.createKey(`${toolId} (compact console)`)).key;
         apiKey = createdKey.current;
       }
-      await api.cliToolConfigure(toolId, { base_url: url.trim(), model: model.trim(), api_key: apiKey });
+      await api.cliToolConfigure(toolId, { base_url: url.trim(), model: model.trim(), api_key: apiKey,
+        ...(toolId === "codex" && { replace_codex_providers: true }) });
       createdKey.current = ""; setKey(""); onSaved();
     });
   };
@@ -319,6 +322,7 @@ function ClientForm({ toolId, baseUrl, busy, perform, onSaved }: {
     {catalog.isError && <p className="manager-error" role="alert">模型目录加载失败：{catalog.error.message}。可以重试或手动输入模型 ID。</p>}
     {!catalog.isPending && !catalog.isError && !modelOptions.size && <p>当前目录为空；可手动输入已确认可用的模型 ID。</p>}
     {toolId === "claude" && <p>保存时将所选模型设为默认，并补充到 <code>modelPicker.options</code>；已有条目不重复添加。Claude Code ≥ 2.1.242 可在 <code>/model</code> 菜单选择，组织策略仍可能限制或覆盖此列表。</p>}
+    {toolId === "codex" && <p>保存时将所选模型设为默认，并同步补充到 <code>kiro-gateway-models.json</code>（自动去重并写入该模型支持的推理档位）；完全退出并重开 Codex Desktop 后即可在模型菜单中选择。</p>}
     <p className="manager-auto-note"><ShieldCheck aria-hidden="true" size={18} />{keyMode === "auto" ? "本地连接自动配置，无需申请或填写官方 API Key。" : "已启用高级令牌设置；这不是上游服务的官方 API Key。"}</p>
     <details className="manager-advanced-settings">
       <summary><Settings2 aria-hidden="true" size={15} />高级设置</summary>

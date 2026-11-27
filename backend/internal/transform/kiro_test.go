@@ -31,6 +31,24 @@ func TestKiro_RenderRequestWithProfile_APIKey(t *testing.T) {
 	}
 }
 
+func TestKiroOptionalHostedSearchIsNotAClientFunction(t *testing.T) {
+	const tools = `[{"type":"web_search_20250305","name":"hosted_lookup"},{"name":"WebSearch","input_schema":{"type":"object"}}]`
+	for _, choice := range []string{`{"type":"auto"}`, `{"type":"any"}`, `{"type":"tool","name":"WebSearch"}`} {
+		req, err := (AnthropicCodec{}).ParseRequest([]byte(`{"tools":` + tools + `,"tool_choice":` + choice + `,"messages":[{"role":"user","content":"hi"}]}`))
+		if err != nil || req.RequiresHostedWebSearch {
+			t.Fatalf("choice %s incorrectly rejected: %v", choice, err)
+		}
+		wire, err := (KiroCodec{}).RenderRequest(req)
+		if err != nil || strings.Contains(string(wire), "hosted_lookup") || !strings.Contains(string(wire), `"name":"WebSearch"`) || len(req.Tools) != 2 {
+			t.Fatalf("choice %s did not preserve only the client function on the wire: %s, %v", choice, wire, err)
+		}
+	}
+	req, err := (OpenAIResponsesCodec{}).ParseRequest([]byte(`{"tools":[{"type":"web_search"}],"input":"hi"}`))
+	if err != nil || req.RequiresHostedWebSearch || len(req.Tools) != 0 {
+		t.Fatalf("an optional Codex hosted tool should not block chat or become a function: %v", err)
+	}
+}
+
 func TestKiro_RenderRequest_NoProfileByDefault(t *testing.T) {
 	req := &core.ChatRequest{
 		Model: "claude-sonnet-4.5",

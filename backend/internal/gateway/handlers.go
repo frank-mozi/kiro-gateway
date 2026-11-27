@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -213,6 +214,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 		resolved.Targets = filtered
 	}
 
+	if req.RequiresHostedWebSearch && len(resolved.Targets) > 0 {
+		if resolved.Targets[0].Provider == "kiro" {
+			const msg = "Kiro direct HTTP does not support required hosted web search: the gateway cannot verify enterprise Web Tools permissions. No search was performed."
+			tr.reject(http.StatusBadRequest, "Required hosted web search is unavailable", msg, "")
+			writeDialectError(w, dialect, http.StatusBadRequest, msg)
+			return
+		}
+		// A Kiro fallback must not silently answer a required search without searching.
+		resolved.Targets = slices.DeleteFunc(resolved.Targets, func(t dispatch.Target) bool { return t.Provider == "kiro" })
+	}
 	tr.routed(resolved.Targets)
 	affinityKey := requestAffinityKey(r, req)
 	req.Metadata.ContextAffinityKey = affinityKey

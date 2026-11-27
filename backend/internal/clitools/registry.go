@@ -30,6 +30,20 @@ type Settings struct {
 	APIKey string `json:"-"`
 	// Model is the tool's default model, "" when the tool picks its own.
 	Model string `json:"model,omitempty"`
+	// ReplaceCodexProviders is requested only by the compact console's confirmed takeover.
+	ReplaceCodexProviders bool `json:"-"`
+	// CodexModel carries optional display and reasoning-effort metadata when
+	// syncing a selected model into Codex's kiro-gateway-models.json catalog.
+	CodexModel *CodexModelMetadata `json:"-"`
+}
+
+// CodexModelMetadata describes a model entry to merge into Codex's local
+// model_catalog_json file.
+type CodexModelMetadata struct {
+	DisplayName  string
+	Description  string
+	EffortLevels []string
+	EffortKnown  bool
 }
 
 // Tool describes a CLI tool that can be auto-configured to use KeiRouter.

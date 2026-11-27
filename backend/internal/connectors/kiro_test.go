@@ -412,9 +412,28 @@ func TestKiroHeaders_ExternalIDPMarker(t *testing.T) {
 	if h["Authorization"] != "Bearer microsoft-token" {
 		t.Errorf("external identity token should be sent as bearer, got %q", h["Authorization"])
 	}
+
 	if h["TokenType"] != "EXTERNAL_IDP" {
 		t.Errorf("external identity requests must carry TokenType=EXTERNAL_IDP, got %q", h["TokenType"])
 	}
+}
+
+func TestKiroGenerationIdentifiesGateway(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.UserAgent() != "kiro-gateway" || r.Header.Get("X-Amz-User-Agent") != "kiro-gateway" {
+			http.Error(w, "unsupported client", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write(encodeEventStreamFrame("assistantResponseEvent", []byte(`{"content":"PONG"}`)))
+		_, _ = w.Write(encodeEventStreamFrame("messageStopEvent", []byte(`{}`)))
+	}))
+	defer srv.Close()
+	resp, err := NewKiro("kiro", srv.URL).Chat(context.Background(), &core.ChatRequest{
+		Model:    "claude-opus-5.5",
+		Messages: []core.Message{{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "ping"}}}},
+	}, core.Credentials{AccessToken: "test", Extra: map[string]string{"kiro_auth_method": "external_idp"}})
+	require.NoError(t, err)
+	require.Equal(t, []core.ContentPart{{Type: core.PartText, Text: "PONG"}}, resp.Message.Content)
 }
 
 func TestKiroResolveProfileArn(t *testing.T) {

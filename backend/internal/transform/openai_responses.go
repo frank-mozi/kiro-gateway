@@ -2,6 +2,7 @@ package transform
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	json "github.com/mydisha/keirouter/backend/internal/fastjson"
@@ -47,9 +48,12 @@ type respRequest struct {
 	Tools        []respTool      `json:"-"`
 	// RawTools keeps each tool definition verbatim so custom tools can be
 	// forwarded untouched; Tools is decoded from it in UnmarshalJSON.
-	RawTools []json.RawMessage `json:"tools,omitempty"`
-	Stream   bool              `json:"stream"`
-	Store    bool              `json:"store"`
+	RawTools          []json.RawMessage `json:"tools,omitempty"`
+	ToolChoice        json.RawMessage   `json:"tool_choice,omitempty"`
+	Include           []string          `json:"include,omitempty"`
+	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
+	Stream            bool              `json:"stream"`
+	Store             bool              `json:"store"`
 	// Chat Completions parameters accepted on inbound parse for graceful
 	// passthrough through the canonical model, but never rendered outbound —
 	// the Responses API rejects these with 400 "Unsupported parameter".
@@ -155,6 +159,7 @@ func (OpenAIResponsesCodec) ParseRequest(body []byte) (*core.ChatRequest, error)
 	}
 
 	req := &core.ChatRequest{Model: raw.Model, Stream: raw.Stream, System: raw.Instructions}
+	req.RequiresHostedWebSearch = requiresHostedSearch(raw.ToolChoice, raw.RawTools)
 	req.Temperature = raw.Temperature
 	req.MaxTokens = raw.MaxTokens
 	if req.MaxTokens == nil {
@@ -168,6 +173,10 @@ func (OpenAIResponsesCodec) ParseRequest(body []byte) (*core.ChatRequest, error)
 	}
 
 	for i, t := range raw.Tools {
+		if hostedSearchType(t.Type) {
+			recordSearchTool(req, raw.RawTools[i], raw.ToolChoice, slices.Contains(raw.Include, "web_search_call.action.sources"))
+			req.HostedWebSearch.ParallelToolCalls = raw.ParallelToolCalls
+		}
 		name := t.Name
 		desc := t.Description
 		params := t.Parameters
@@ -178,6 +187,10 @@ func (OpenAIResponsesCodec) ParseRequest(body []byte) (*core.ChatRequest, error)
 		}
 		if strings.TrimSpace(name) == "" {
 			continue // hosted tools without a name can't be functions
+		}
+		if hostedSearchType(t.Type) {
+			req.Tools = append(req.Tools, core.Tool{Name: name, Raw: raw.RawTools[i]})
+			continue
 		}
 		if t.Type == "custom" {
 			// Freeform (grammar/text) tools such as Codex's apply_patch have
@@ -691,6 +704,9 @@ func (OpenAIResponsesCodec) ParseResponse(body []byte, model string) (*core.Chat
 // RenderResponse encodes a canonical response as a Responses API result for a
 // client that speaks the Responses dialect.
 func (OpenAIResponsesCodec) RenderResponse(resp *core.ChatResponse) ([]byte, error) {
+	if resp.HostedSearch != nil {
+		return renderHostedSearchResponse(core.DialectOpenAIResponses, resp)
+	}
 	var output []map[string]any
 	idx := 0
 	for _, p := range resp.Message.Content {

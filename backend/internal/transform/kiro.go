@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -343,7 +344,14 @@ func (KiroCodec) RenderWithNativeFields(req *core.ChatRequest, profileArn, accou
 
 	thinking := modelThinking || kiroThinkingEnabled(req, req.Model)
 
-	history, current := buildKiroHistory(req, upstream)
+	// Never turn optional provider-hosted search into an executable client function.
+	// Filter before rendering history so the no-tools path still pairs turns correctly.
+	wireReq := *req
+	isHostedSearch := func(t core.Tool) bool { _, hosted := hostedSearchTool(t.Raw); return hosted }
+	if slices.ContainsFunc(req.Tools, isHostedSearch) {
+		wireReq.Tools = slices.DeleteFunc(slices.Clone(req.Tools), isHostedSearch)
+	}
+	history, current := buildKiroHistory(&wireReq, upstream)
 
 	// Compose the final user content with the system prefix.
 	finalContent, _ := current["content"].(string)

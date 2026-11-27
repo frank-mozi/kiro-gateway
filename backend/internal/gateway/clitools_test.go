@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -136,6 +137,72 @@ func TestCLIToolConfigure_Validation(t *testing.T) {
 
 	code, _ = doCLI(t, r, http.MethodGet, "/cli-tools/nope", "")
 	require.Equal(t, http.StatusNotFound, code)
+}
+
+func TestCLIToolConfigure_CodexTakeover(t *testing.T) {
+	h, router, home := cliToolsRouter(t)
+	path := filepath.Join(home, ".codex", "config.toml")
+	const original = `model_provider = "keirouter"
+approval_policy = "on-request"
+[model_providers.keirouter]
+base_url = "http://127.0.0.1:20180/v1"
+[model_providers.copilot_local]
+base_url = "http://localhost:4141/"
+[profiles.work]
+model_provider = "copilot_local"
+model = "previous-model"
+model_reasoning_effort = "high"
+[profiles.direct]
+model_provider = "openai"
+`
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
+	require.NoError(t, os.WriteFile(path, []byte(original), 0600))
+	for range 2 {
+		code, resp := doCLI(t, router, http.MethodPost, "/cli-tools/codex/configure",
+			`{"base_url":"http://127.0.0.1:20180","api_key":"`+h.apiKey+`","model":"kiro/auto","replace_codex_providers":true}`)
+		require.Equal(t, http.StatusOK, code, resp)
+	}
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var cfg map[string]any
+	require.NoError(t, toml.Unmarshal(raw, &cfg))
+	providers := cfg["model_providers"].(map[string]any)
+	require.Len(t, providers, 1)
+	require.Equal(t, "http://127.0.0.1:20180/v1", providers["keirouter"].(map[string]any)["base_url"])
+	require.Equal(t, "keirouter", cfg["model_provider"])
+	require.Equal(t, "kiro/auto", cfg["model"])
+	require.Equal(t, "on-request", cfg["approval_policy"])
+	profiles := cfg["profiles"].(map[string]any)
+	require.Equal(t, map[string]any{"model_reasoning_effort": "high"}, profiles["work"])
+	require.Equal(t, map[string]any{"model_provider": "openai"}, profiles["direct"])
+	backup, err := os.ReadFile(path + ".before-kiro-takeover.bak")
+	require.NoError(t, err)
+	require.Equal(t, original, string(backup))
+
+	catalogPath := filepath.Join(home, ".codex", "kiro-gateway-models.json")
+	require.Equal(t, catalogPath, cfg["model_catalog_json"])
+	catRaw, err := os.ReadFile(catalogPath)
+	require.NoError(t, err)
+	var catDoc struct {
+		Models []struct {
+			Slug        string `json:"slug"`
+			DisplayName string `json:"display_name"`
+		} `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(catRaw, &catDoc))
+	require.Equal(t, 1, len(catDoc.Models), "repeated save must deduplicate models")
+	require.Equal(t, "kiro/auto", catDoc.Models[0].Slug)
+	require.Equal(t, "Kiro Auto", catDoc.Models[0].DisplayName)
+
+	// Selecting another Kiro model appends it without duplicating previous selections.
+	code, resp := doCLI(t, router, http.MethodPost, "/cli-tools/codex/configure",
+		`{"base_url":"http://127.0.0.1:20180","api_key":"`+h.apiKey+`","model":"kiro/claude-sonnet-5","replace_codex_providers":true}`)
+	require.Equal(t, http.StatusOK, code, resp)
+	catRaw, err = os.ReadFile(catalogPath)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(catRaw, &catDoc))
+	require.Equal(t, []string{"kiro/auto", "kiro/claude-sonnet-5"}, []string{catDoc.Models[0].Slug, catDoc.Models[1].Slug})
+	require.Equal(t, "Kiro Claude Sonnet 5", catDoc.Models[1].DisplayName)
 }
 
 func TestEndpointKey(t *testing.T) {

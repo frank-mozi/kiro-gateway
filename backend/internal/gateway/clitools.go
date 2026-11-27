@@ -7,12 +7,16 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/mydisha/keirouter/backend/internal/clitools"
+	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/crypto"
+	"github.com/mydisha/keirouter/backend/internal/transform"
 )
 
 // cliToolSettingsView is the connection stored in a tool's config, as shown to
@@ -85,9 +89,14 @@ func (s *Server) handleCLIToolConfigure(w http.ResponseWriter, r *http.Request) 
 		Model  string `json:"model"`
 		// Models is accepted for older clients; the first entry is the
 		// default model.
-		Models []string `json:"models"`
+		Models                []string `json:"models"`
+		ReplaceCodexProviders bool     `json:"replace_codex_providers"`
 	}
 	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.ReplaceCodexProviders && tool.ID() != "codex" {
+		writeError(w, http.StatusBadRequest, "replace_codex_providers is only supported for Codex")
 		return
 	}
 
@@ -130,10 +139,17 @@ func (s *Server) handleCLIToolConfigure(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	var codexModel *clitools.CodexModelMetadata
+	if tool.ID() == "codex" && model != "" {
+		codexModel = s.resolveCodexModelMetadata(r.Context(), model)
+	}
+
 	st, err := s.cliTools.Configure(r.Context(), tool, s.cliToolHome, clitools.Settings{
-		BaseURL: baseURL,
-		APIKey:  apiKey,
-		Model:   model,
+		BaseURL:               baseURL,
+		APIKey:                apiKey,
+		Model:                 model,
+		ReplaceCodexProviders: body.ReplaceCodexProviders,
+		CodexModel:            codexModel,
 	})
 	if err != nil {
 		writeCLIToolError(w, err)
@@ -143,6 +159,83 @@ func (s *Server) handleCLIToolConfigure(w http.ResponseWriter, r *http.Request) 
 		"ok":   true,
 		"tool": s.cliToolView(r, st, snippetsByID(s.publicBaseURL(r), "")[st.ID]),
 	})
+}
+
+var kiroCreditLabelPattern = regexp.MustCompile(` \([\d.eE+-]+x credit\)`)
+
+func stripKiroCreditLabel(name string) string {
+	return strings.TrimSpace(kiroCreditLabelPattern.ReplaceAllString(name, ""))
+}
+
+func (s *Server) resolveCodexModelMetadata(ctx context.Context, model string) *clitools.CodexModelMetadata {
+	provider, localID, ok := strings.Cut(model, "/")
+	if !ok && s.aliases != nil {
+		if alias, err := s.aliases.Get(ctx, model); err == nil {
+			provider, localID, ok = strings.Cut(alias.Target, "/")
+		}
+	}
+	if !ok || provider != "kiro" || strings.TrimSpace(localID) == "" {
+		return nil
+	}
+	localID = strings.TrimSpace(localID)
+	baseID := transform.KiroBaseModel(localID)
+
+	meta := &clitools.CodexModelMetadata{}
+	for _, m := range connectors.ModelsForProvider("kiro") {
+		if m.ID == localID {
+			meta.DisplayName = stripKiroCreditLabel(m.Name)
+			break
+		}
+	}
+
+	for _, lm := range s.kiroLiveModelSpecs(ctx) {
+		if lm.ID == localID {
+			meta.DisplayName = stripKiroCreditLabel(lm.Name)
+		}
+		if lm.ID == baseID {
+			if meta.DisplayName == "" && localID == baseID {
+				meta.DisplayName = stripKiroCreditLabel(lm.Name)
+			}
+			meta.EffortLevels = lm.KiroEffortLevels()
+			meta.EffortKnown = true
+		}
+	}
+	return meta
+}
+
+func (s *Server) kiroLiveModelSpecs(ctx context.Context) []connectors.ModelSpec {
+	src := connectors.GetLiveModelSource("kiro")
+	if src == nil || s.accounts == nil || s.vault == nil || s.liveModels == nil {
+		return nil
+	}
+	accs, err := s.accounts.ListByProvider(ctx, adminTenant, "kiro")
+	if err != nil {
+		return nil
+	}
+	for _, acc := range accs {
+		if acc.Disabled {
+			continue
+		}
+		egressCtx := s.accountEgressContext(ctx, acc)
+		if s.refresher != nil && acc.TokenExpiresAt != nil && acc.TokenExpiresAt.Before(time.Now()) {
+			if fresh, ferr := s.refresher.EnsureFresh(egressCtx, acc); ferr == nil {
+				acc = fresh
+			}
+		}
+		creds, oerr := s.vault.Open(acc)
+		if oerr != nil {
+			continue
+		}
+		models, done := s.liveModels.list(egressCtx, "kiro\x00"+acc.ID+"\x00"+acc.UpdatedAt.String(), false, 5*time.Second, func(fetchCtx context.Context) ([]connectors.ModelSpec, error) {
+			fetchCtx, cancel := context.WithTimeout(fetchCtx, 10*time.Second)
+			defer cancel()
+			return src.ListModels(fetchCtx, creds)
+		})
+		if done && len(models) > 0 {
+			return models
+		}
+	}
+	return nil
 }
 
 // handleCLIToolRemove strips KeiRouter config from a specific tool.

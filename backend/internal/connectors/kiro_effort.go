@@ -33,6 +33,35 @@ func (s kiroFieldSchema) strings(path, field string) []string {
 	return values
 }
 
+func parseKiroEffortSpec(raw string) (path string, adaptive bool, levels []string, err error) {
+	var schema kiroFieldSchema
+	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
+		return "", false, nil, err
+	}
+	adaptive = slices.Contains(schema.strings("thinking", "type"), "adaptive")
+	for _, p := range []string{"output_config", "reasoning"} {
+		ls := schema.strings(p, "effort")
+		if len(ls) == 0 || (p == "output_config" && !adaptive) {
+			continue
+		}
+		return p, adaptive, ls, nil
+	}
+	return "", adaptive, nil, nil
+}
+
+// KiroEffortLevels returns the native effort levels declared in Kiro's live
+// model schema, or nil when none are declared.
+func (m ModelSpec) KiroEffortLevels() []string {
+	if m.kiroEffortSchema == "" {
+		return nil
+	}
+	_, _, levels, err := parseKiroEffortSpec(m.kiroEffortSchema)
+	if err != nil {
+		return nil
+	}
+	return levels
+}
+
 func (c *Kiro) nativeEffort(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (map[string]any, error) {
 	level := req.ClientEffort
 	if level == "" || req.ClientThinkingType == "disabled" {
@@ -50,16 +79,11 @@ func (c *Kiro) nativeEffort(ctx context.Context, req *core.ChatRequest, creds co
 		if model.ID != id || model.kiroEffortSchema == "" {
 			continue
 		}
-		var schema kiroFieldSchema
-		if err := json.Unmarshal([]byte(model.kiroEffortSchema), &schema); err != nil {
+		path, adaptive, levels, err := parseKiroEffortSpec(model.kiroEffortSchema)
+		if err != nil {
 			return nil, reject("cannot read native effort schema for " + id)
 		}
-		adaptive := slices.Contains(schema.strings("thinking", "type"), "adaptive")
-		for _, path := range []string{"output_config", "reasoning"} {
-			levels := schema.strings(path, "effort")
-			if len(levels) == 0 || (path == "output_config" && !adaptive) {
-				continue
-			}
+		if path != "" {
 			if adaptive && req.AnthropicThinkingInput && req.ClientThinkingType != "enabled" && req.ClientThinkingType != "adaptive" {
 				return nil, nil // e.g. CC title requests
 			}

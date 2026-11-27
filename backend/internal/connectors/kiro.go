@@ -305,14 +305,14 @@ func (c *Kiro) acquireAccountSlot(ctx context.Context, creds core.Credentials, m
 	}
 }
 
-// headers builds the AWS SDK + CodeWhisperer headers Kiro expects.
+// headers identifies the gateway itself rather than an unsupported IDE client.
 func (c *Kiro) headers(creds core.Credentials) map[string]string {
+	const agent = "kiro-gateway"
 	h := map[string]string{
-
 		"Accept":                "application/vnd.amazon.eventstream",
 		"X-Amz-Target":          "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
-		"User-Agent":            "AWS-SDK-JS/3.0.0 kiro-ide/1.0.0",
-		"X-Amz-User-Agent":      "aws-sdk-js/3.0.0 kiro-ide/1.0.0",
+		"User-Agent":            agent,
+		"X-Amz-User-Agent":      agent,
 		"Amz-Sdk-Request":       "attempt=1; max=3",
 		"Amz-Sdk-Invocation-Id": uuid.NewString(),
 	}

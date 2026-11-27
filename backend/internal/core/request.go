@@ -58,6 +58,10 @@ type ChatRequest struct {
 
 	Tools      []Tool `json:"tools,omitempty"`
 	ToolChoice any    `json:"tool_choice,omitempty"`
+	// RequiresHostedWebSearch records an explicit server-search choice before tool normalization.
+	RequiresHostedWebSearch bool `json:"-"`
+	// HostedWebSearch keeps the client's declarations, not permission to execute them.
+	HostedWebSearch *HostedWebSearchRequest `json:"-"`
 	// ParallelToolCalls, when set, requests (true) or forbids (false) the
 	// model issuing several tool calls in one turn. OpenAI: parallel_tool_calls;
 	// Anthropic: tool_choice.disable_parallel_tool_use. Nil leaves the
@@ -101,6 +105,13 @@ type ChatRequest struct {
 	// Extra preserves dialect-specific fields the canonical model does not model
 	// explicitly, so they can be passed through on same-dialect routing.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+type HostedWebSearchRequest struct {
+	Tools             []json.RawMessage
+	ToolChoice        json.RawMessage
+	IncludeSources    bool
+	ParallelToolCalls *bool
 }
 
 // ReasoningConfig expresses extended-thinking intent in a provider-neutral way.

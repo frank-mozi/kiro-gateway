@@ -293,6 +293,159 @@ func TestStripJSONC(t *testing.T) {
 	}
 }
 
+func TestCodexModelCatalogMergeAndDedup(t *testing.T) {
+	ctx := context.Background()
+	home := isolate(t)
+	tool := &CodexTool{}
+	r := NewRegistry()
+
+	cfgPath := tool.configPath(home)
+	catPath := tool.catalogPath(home)
+	const seedCfg = "model_reasoning_effort = 'none'\napproval_policy = 'on-request'\n"
+	const seedCatalog = `{"models":[
+		{"slug":"kiro/claude-opus-5.5","display_name":"Kiro Claude Opus 5.5","description":"Keep custom","priority":0,"supported_reasoning_levels":[]},
+		{"slug":"kiro/claude-opus-5.5","display_name":"Duplicate","priority":0,"supported_reasoning_levels":[]},
+		{"slug":"gpt-6-luna","display_name":"GPT-6-Luna","priority":4,"supported_reasoning_levels":[{"effort":"medium","description":"Balanced"}]}
+	]}`
+	writeTestFile(t, cfgPath, seedCfg)
+	writeTestFile(t, catPath, seedCatalog)
+
+	// 1. Add a new Kiro model with live effort levels: deduplicates existing entries,
+	// inserts after existing Kiro models (before bundled GPT), and clears incompatible 'none' effort.
+	sonnet := Settings{
+		BaseURL: testSettings.BaseURL,
+		APIKey:  testSettings.APIKey,
+		Model:   "kiro/claude-sonnet-5",
+		CodexModel: &CodexModelMetadata{
+			DisplayName:  "Kiro Claude Sonnet 5",
+			EffortLevels: []string{"low", "medium", "high", "xhigh", "max"},
+			EffortKnown:  true,
+		},
+	}
+	if _, err := r.Configure(ctx, tool, home, sonnet); err != nil {
+		t.Fatal(err)
+	}
+	firstCatalog := readTestFile(t, catPath)
+
+	// Repeated save of the same model must be idempotent and add no duplicates.
+	if _, err := r.Configure(ctx, tool, home, sonnet); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestFile(t, catPath); got != firstCatalog {
+		t.Fatal("repeated save altered catalog or added a duplicate")
+	}
+	if got := readTestFile(t, backupPath(catPath)); got != seedCatalog {
+		t.Fatal("original catalog backup was not preserved")
+	}
+
+	// 2. Re-saving Opus backfills its empty supported_reasoning_levels without losing custom description.
+	opus := Settings{
+		BaseURL: testSettings.BaseURL,
+		APIKey:  testSettings.APIKey,
+		Model:   "kiro/claude-opus-5.5",
+		CodexModel: &CodexModelMetadata{
+			DisplayName:  "Kiro Claude Opus 5.5",
+			EffortLevels: []string{"low", "medium", "high", "xhigh", "max"},
+			EffortKnown:  true,
+		},
+	}
+	if _, err := r.Configure(ctx, tool, home, opus); err != nil {
+		t.Fatal(err)
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(readTestFile(t, catPath)), &doc); err != nil {
+		t.Fatal(err)
+	}
+	models := doc["models"].([]any)
+	if len(models) != 3 {
+		t.Fatalf("len(models) = %d, want 3: %#v", len(models), models)
+	}
+	wantOrder := []string{"kiro/claude-opus-5.5", "kiro/claude-sonnet-5", "gpt-6-luna"}
+	for i, wantSlug := range wantOrder {
+		entry := models[i].(map[string]any)
+		if entry["slug"] != wantSlug {
+			t.Fatalf("models[%d].slug = %v, want %q", i, entry["slug"], wantSlug)
+		}
+	}
+	opusEntry := models[0].(map[string]any)
+	if opusEntry["description"] != "Keep custom" || opusEntry["default_reasoning_level"] != "medium" || len(opusEntry["supported_reasoning_levels"].([]any)) != 5 {
+		t.Fatalf("unexpected opus entry after backfill: %#v", opusEntry)
+	}
+	sonnetEntry := models[1].(map[string]any)
+	if sonnetEntry["display_name"] != "Kiro Claude Sonnet 5" || sonnetEntry["default_reasoning_level"] != "medium" || len(sonnetEntry["supported_reasoning_levels"].([]any)) != 5 {
+		t.Fatalf("unexpected sonnet entry: %#v", sonnetEntry)
+	}
+
+	parsedCfg, _, err := loadTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if str(parsedCfg, "model_catalog_json") != catPath {
+		t.Fatalf("model_catalog_json = %q, want %q", str(parsedCfg, "model_catalog_json"), catPath)
+	}
+	if _, exists := parsedCfg["model_reasoning_effort"]; exists {
+		t.Fatalf("incompatible model_reasoning_effort='none' was not removed: %#v", parsedCfg)
+	}
+
+	// Disconnect removes model_catalog_json from config.toml while keeping the catalog file intact.
+	if _, err := r.Remove(ctx, tool, home); err != nil {
+		t.Fatal(err)
+	}
+	afterRemoveCfg, _, err := loadTOML(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := afterRemoveCfg["model_catalog_json"]; exists {
+		t.Fatalf("model_catalog_json remained after Remove: %#v", afterRemoveCfg)
+	}
+	if !fileExists(catPath) {
+		t.Fatal("Remove deleted kiro-gateway-models.json")
+	}
+}
+
+func TestCodexModelCatalogInvalidStructureDoesNotWrite(t *testing.T) {
+	for _, bad := range []string{
+		`{"broken":`,
+		`null`,
+		`[]`,
+		`{"models":null}`,
+		`{"models":{}}`,
+		`{"models":["kiro/sonnet"]}`,
+		`{"models":[{}]}`,
+		`{"models":[{"slug":""}]}`,
+	} {
+		t.Run(bad, func(t *testing.T) {
+			home := isolate(t)
+			tool := &CodexTool{}
+			cfgPath := tool.configPath(home)
+			catPath := tool.catalogPath(home)
+			const origCfg = "approval_policy = 'on-request'\n"
+			writeTestFile(t, cfgPath, origCfg)
+			writeTestFile(t, catPath, bad)
+
+			err := tool.Configure(home, Settings{
+				BaseURL: testSettings.BaseURL,
+				APIKey:  testSettings.APIKey,
+				Model:   "kiro/claude-sonnet-5",
+			})
+			var pe *ParseError
+			if !errors.As(err, &pe) || pe.Path != catPath {
+				t.Fatalf("err = %v, want *ParseError for %s", err, catPath)
+			}
+			if got := readTestFile(t, cfgPath); got != origCfg {
+				t.Fatal("config.toml was modified on invalid catalog")
+			}
+			if got := readTestFile(t, catPath); got != bad {
+				t.Fatal("invalid catalog was overwritten")
+			}
+			if fileExists(backupPath(catPath)) {
+				t.Fatal("unexpected backup written for invalid catalog")
+			}
+		})
+	}
+}
+
 func TestDetectBinaryAndExtension(t *testing.T) {
 	ctx := context.Background()
 	home := isolate(t)

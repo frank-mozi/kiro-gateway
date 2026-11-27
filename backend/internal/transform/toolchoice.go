@@ -1,8 +1,74 @@
 package transform
 
 import (
+	"strings"
+
+	"github.com/mydisha/keirouter/backend/internal/core"
 	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 )
+
+func hostedSearchType(typ string) bool {
+	return typ == "web_search" || strings.HasPrefix(typ, "web_search_")
+}
+
+type toolRef struct{ Type, Name string }
+
+func recordSearchTool(req *core.ChatRequest, tool, choice json.RawMessage, sources bool) {
+	if req.HostedWebSearch == nil {
+		req.HostedWebSearch = &core.HostedWebSearchRequest{ToolChoice: choice, IncludeSources: sources}
+	}
+	req.HostedWebSearch.Tools = append(req.HostedWebSearch.Tools, tool)
+}
+
+func hostedSearchTool(raw json.RawMessage) (toolRef, bool) {
+	var t toolRef
+	if len(raw) == 0 || json.Unmarshal(raw, &t) != nil {
+		return t, false
+	}
+	return t, hostedSearchType(t.Type)
+}
+
+// An auto choice advertises availability; it does not require execution.
+// A named client function called WebSearch is not a provider-hosted tool.
+func requiresHostedSearch(choice json.RawMessage, tools []json.RawMessage) bool {
+	if len(choice) == 0 {
+		return false
+	}
+	var c struct {
+		Type, Name, Mode string
+		Tools            []json.RawMessage
+	}
+	if choice[0] == '"' {
+		if json.Unmarshal(choice, &c.Type) != nil {
+			return false
+		}
+	} else if json.Unmarshal(choice, &c) != nil {
+		return false
+	}
+	switch c.Type {
+	case "tool": // Anthropic selects a tool by its declared name.
+		for _, raw := range tools {
+			if t, hosted := hostedSearchTool(raw); hosted && c.Name != "" && t.Name == c.Name {
+				return true
+			}
+		}
+		return false
+	case "allowed_tools":
+		if c.Mode != "required" {
+			return false
+		}
+		tools = c.Tools
+	case "required", "any":
+	default:
+		return hostedSearchType(c.Type)
+	}
+	for _, raw := range tools {
+		if _, hosted := hostedSearchTool(raw); !hosted {
+			return false
+		}
+	}
+	return len(tools) > 0
+}
 
 // Tool-choice translation. The canonical request stores tool_choice in the
 // OpenAI form (the string "auto"/"none"/"required" or an object

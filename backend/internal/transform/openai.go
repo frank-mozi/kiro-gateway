@@ -209,6 +209,7 @@ func (OpenAICodec) ParseRequest(body []byte) (*core.ChatRequest, error) {
 		req.MaxTokens = raw.MaxCompletionTokens
 	}
 	req.Extra = parseOAIExtraParams(body)
+	req.RequiresHostedWebSearch = len(req.Extra["web_search_options"]) > 0
 	// stream_options.include_usage: the client opts in to a usage event on the
 	// streaming response. We don't forward this upstream (many OpenAI-compatible
 	// providers 400 on it — see renderOAIRequest), but the pipeline honors it by

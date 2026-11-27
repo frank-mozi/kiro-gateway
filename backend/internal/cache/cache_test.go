@@ -35,6 +35,17 @@ func TestCache_HitOnIdenticalVector(t *testing.T) {
 	require.Equal(t, "cached answer", got.Message.TextContent())
 }
 
+func TestCacheDoesNotReplayHostedSearch(t *testing.T) {
+	c := New(Config{Enabled: true}, nil)
+	vec := []float32{1, 0}
+	r := resp("an answer based on a private search")
+	r.HostedSearch = &core.HostedSearchReceipt{ID: "test"}
+	require.NoError(t, c.Store(context.Background(), vec, r))
+	_, ok, err := c.Lookup(context.Background(), vec)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 func TestCache_MissBelowThreshold(t *testing.T) {
 	c := New(Config{Enabled: true, SimilarityThreshold: 0.99, TTL: time.Hour}, nil)
 	require.NoError(t, c.Store(context.Background(), []float32{1, 0, 0}, resp("x")))

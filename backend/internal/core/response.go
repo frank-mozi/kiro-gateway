@@ -55,11 +55,13 @@ type Usage struct {
 
 // ChatResponse is the canonical non-streaming completion result.
 type ChatResponse struct {
-	ID           string       `json:"id"`
-	Model        string       `json:"model"`
-	Message      Message      `json:"message"`
-	FinishReason FinishReason `json:"finish_reason"`
-	Usage        Usage        `json:"usage"`
+	ID      string  `json:"id"`
+	Model   string  `json:"model"`
+	Message Message `json:"message"`
+	// HostedSearch is evidence from a completed hosted tool execution, never client input.
+	HostedSearch *HostedSearchReceipt `json:"-"`
+	FinishReason FinishReason         `json:"finish_reason"`
+	Usage        Usage                `json:"usage"`
 }
 
 // ChunkType discriminates streaming events.

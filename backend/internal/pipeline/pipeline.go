@@ -254,7 +254,8 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	// request, so cache keys are stable across slimmer/terse settings. Cached
 	// hits cost nothing and skip the upstream entirely.
 	var vec []float32
-	if !opts.SkipCache {
+	// A prompt-only semantic hit cannot satisfy web access controls or provide fresh sources.
+	if !opts.SkipCache && req.HostedWebSearch == nil && !req.RequiresHostedWebSearch {
 		vec = p.embedPrompt(ctx, req)
 	}
 	if hit, ok := p.cacheLookup(ctx, vec); ok {

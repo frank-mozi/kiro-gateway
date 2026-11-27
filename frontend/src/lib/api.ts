@@ -1811,7 +1811,7 @@ export const api = {
     request<CLIToolsResponse>("GET", model ? `/cli-tools?model=${encodeURIComponent(model)}` : "/cli-tools"),
   cliTool: (toolId: string) => request<CLITool>("GET", `/cli-tools/${encodeURIComponent(toolId)}`),
   /** Omit api_key to keep the key already stored in the tool's config. */
-  cliToolConfigure: (toolId: string, body: { base_url: string; api_key?: string; model?: string }) =>
+  cliToolConfigure: (toolId: string, body: { base_url: string; api_key?: string; model?: string; replace_codex_providers?: boolean }) =>
     request<{ ok: boolean; tool: CLITool }>("POST", `/cli-tools/${encodeURIComponent(toolId)}/configure`, body),
   cliToolRemove: (toolId: string) =>
     request<{ ok: boolean; tool: CLITool }>("POST", `/cli-tools/${encodeURIComponent(toolId)}/remove`),
